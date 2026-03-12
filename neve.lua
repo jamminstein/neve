@@ -38,36 +38,10 @@ local BASE_ANGLE = -2.35
 local knobs = {}
 
 --------------------------------------
--- INIT
---------------------------------------
-
-function init()
-  math.randomseed(os.time())
-
-  for i = 1, NUM_KNOBS do
-    knobs[i] = { angle = BASE_ANGLE }
-  end
-
-  params:add_separator("NEVE VOCAL CHAIN")
-
-  apply_intensity()
-
-  clock.run(function()
-    while true do
-      clock.sleep(1/30)
-      frame = frame + 1
-      animate_knobs()
-      update_vu()
-      redraw()
-    end
-  end)
-end
-
---------------------------------------
 -- INTENSITY → ENGINE
 --------------------------------------
 
-function apply_intensity()
+local function apply_intensity()
   local t = intensity / 100
 
   if     intensity == 0  then stage_name = "---"
@@ -94,14 +68,14 @@ function apply_intensity()
   engine.clip_mode(clip_mode)
 
   -- transient shaper
-  engine.trans_attackhutil.linlin(0, 1, 0.005, 0.001, t))
+  engine.trans_attack(util.linlin(0, 1, 0.005, 0.001, t))
   engine.trans_sustain(util.linlin(0, 1, 0.5, 0.15, t))
   engine.trans_mix(util.linlin(0, 1, 0.0, 0.65, t))
 
   -- compressor
   engine.comp_thresh(util.linlin(0, 1, 0.9, 0.15, t))
   engine.comp_ratio(util.linlin(0, 1, 1.5, 8.0, t))
-  engine.comp_attackhutil.linlin(0, 1, 0.05, 0.003, t))
+  engine.comp_attack(util.linlin(0, 1, 0.05, 0.003, t))
   engine.comp_release(util.linlin(0, 1, 0.4, 0.08, t))
   engine.comp_mix(util.linlin(0, 1, 0.0, 0.9, t))
 
@@ -291,6 +265,32 @@ function redraw()
   screen.text_right(string.format("%3d", intensity))
 
   screen.update()
+end
+
+--------------------------------------
+-- INIT
+--------------------------------------
+
+function init()
+  math.randomseed(os.time())
+
+  for i = 1, NUM_KNOBS do
+    knobs[i] = { angle = BASE_ANGLE }
+  end
+
+  params:add_separator("NEVE VOCAL CHAIN")
+
+  apply_intensity()
+
+  clock.run(function()
+    while true do
+      clock.sleep(1/30)
+      frame = frame + 1
+      animate_knobs()
+      update_vu()
+      redraw()
+    end
+  end)
 end
 
 --------------------------------------
