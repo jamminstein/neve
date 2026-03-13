@@ -1,14 +1,17 @@
 -- NEVE
 -- vocal chain: transient → preamp → comp → soothe → air
--- enc1: intensity  |  k1: clip mode  |  k2: mono  |  k3: bypass
+-- enc1: intensity  |  k1: clip mode  |  k2: mono  |  k3: A/B toggle
 -- inspired by Rupert Neve 1073, SSL comp, Soothe2
+-- Features: A/B comparison mode, vocal presets
 
 engine.name = "Neve"
 
 local intensity  = 0
 local bypassed   = false
-local clip_mode  = 0      -- 0=tube  1=tape
+local ab_mode    = false       -- false=A (processed), true=B (bypass)
+local clip_mode  = 0           -- 0=tube  1=tape
 local mono_sum   = false
+local vocal_preset = 1         -- 1=warm, 2=bright, 3=aggressive, 4=broadcast
 local stage_name = "---"
 local frame      = 0
 local vu_level   = 0
@@ -35,20 +38,62 @@ local KNOB_DEFS = {
 local ANGLE_MAP  = { 2.5, 3.0, -2.0, 2.8, -1.8, 2.2, 1.5, 1.2, 1.8, 3.2, 2.0, 2.6 }
 local BASE_ANGLE = -2.35
 
+local VOCAL_PRESETS = {
+  warm       = { name = "WARM",       range_min = 0.3, range_max = 0.6, bias = "low"  },
+  bright     = { name = "BRIGHT",     range_min = 0.5, range_max = 0.8, bias = "high" },
+  aggressive = { name = "AGGRESSIVE", range_min = 0.7, range_max = 1.0, bias = "high" },
+  broadcast  = { name = "BROADCAST",  range_min = 0.4, range_max = 0.7, bias = "mid"  },
+}
+
+local PRESET_NAMES = { "warm", "bright", "aggressive", "broadcast" }
+
 local knobs = {}
 
 --------------------------------------
--- INTENSITY → ENGINE
+-- INTENSITY → ENGINE (with preset mapping)
 --------------------------------------
 
 local function apply_intensity()
-  local t = intensity / 100
+  -- Apply vocal preset intensity curve if a preset is active
+  local effective_intensity = intensity
+  
+  if vocal_preset >= 1 and vocal_preset <= #PRESET_NAMES then
+    local preset = VOCAL_PRESETS[PRESET_NAMES[vocal_preset]]
+    if preset then
+      -- Map intensity through preset range
+      local t = intensity / 100
+      if preset.bias == "low" then
+        -- Bias toward lower range
+        effective_intensity = util.linlin(0, 1, preset.range_min, preset.range_max, t * 0.7) * 100
+      elseif preset.bias == "high" then
+        -- Bias toward higher range
+        effective_intensity = util.linlin(0, 1, preset.range_min, preset.range_max, 0.3 + t * 0.7) * 100
+      else
+        -- Mid bias (balanced)
+        effective_intensity = util.linlin(0, 1, preset.range_min, preset.range_max, t) * 100
+      end
+    end
+  end
 
-  if     intensity == 0  then stage_name = "---"
-  elseif intensity <= 25 then stage_name = "PRE"
-  elseif intensity <= 50 then stage_name = "CMP"
-  elseif intensity <= 75 then stage_name = "SOO"
-  else                        stage_name = "AIR"
+  local t = effective_intensity / 100
+
+  if     effective_intensity == 0  then stage_name = "---"
+  elseif effective_intensity <= 25 then stage_name = "PRE"
+  elseif effective_intensity <= 50 then stage_name = "CMP"
+  elseif effective_intensity <= 75 then stage_name = "SOO"
+  else                                  stage_name = "AIR"
+  end
+
+  -- A/B comparison: if in B mode, temporarily bypass by setting intensity to 0
+  if ab_mode then
+    engine.input_gain(1.0)
+    engine.sat_drive(0.0)
+    engine.trans_mix(0.0)
+    engine.comp_mix(0.0)
+    engine.sooth_depth(0.0)
+    engine.air_gain(0.0)
+    engine.out_gain(1.0)
+    return
   end
 
   if bypassed then
@@ -143,7 +188,7 @@ local function draw_knob(k, def, t)
   screen.circle(x, y, r)
   screen.stroke()
 
-  screen.level(bypassed and 5 or 15)
+  screen.level((bypassed or ab_mode) and 5 or 15)
   screen.move(x, y)
   screen.line(
     x + (r - 1) * math.cos(k.angle),
@@ -169,13 +214,13 @@ local function draw_vu()
   screen.arc(cx, cy, R, min_a, max_a)
   screen.stroke()
 
-  if not bypassed and vu_level > 0.01 then
+  if not (bypassed or ab_mode) and vu_level > 0.01 then
     screen.level(math.floor(util.linlin(0, 1, 4, 14, vu_level)))
     screen.arc(cx, cy, R, min_a, vu_a)
     screen.stroke()
   end
 
-  screen.level(bypassed and 4 or 15)
+  screen.level((bypassed or ab_mode) and 4 or 15)
   screen.move(cx, cy)
   screen.line(cx + R * math.cos(vu_a), cy + R * math.sin(vu_a))
   screen.stroke()
@@ -231,13 +276,13 @@ function redraw()
   end
 
   -- header
-  screen.level(bypassed and 3 or math.floor(util.linlin(0, 1, 4, 15, t)))
+  screen.level((bypassed or ab_mode) and 3 or math.floor(util.linlin(0, 1, 4, 15, t)))
   screen.font_size(8)
   screen.font_face(4)
   screen.move(2, 8)
   screen.text("NEVE")
 
-  screen.level(bypassed and 2 or math.floor(util.linlin(0, 1, 2, 10, t)))
+  screen.level((bypassed or ab_mode) and 2 or math.floor(util.linlin(0, 1, 2, 10, t)))
   screen.font_size(5)
   screen.font_face(1)
   screen.move(36, 8)
@@ -253,10 +298,15 @@ function redraw()
     screen.text("MONO")
   end
 
-  if bypassed then
-    screen.level(8)
+  -- A/B mode display
+  if ab_mode then
+    screen.level(12)
     screen.move(110, 8)
-    screen.text("BYP")
+    screen.text("B")
+  else
+    screen.level(4)
+    screen.move(110, 8)
+    screen.text("A")
   end
 
   screen.level(6)
@@ -279,6 +329,12 @@ function init()
   end
 
   params:add_separator("NEVE VOCAL CHAIN")
+
+  params:add_option("vocal_preset", "vocal preset", PRESET_NAMES, vocal_preset)
+  params:set_action("vocal_preset", function(v)
+    vocal_preset = v
+    apply_intensity()
+  end)
 
   apply_intensity()
 
@@ -312,7 +368,7 @@ function key(n, z)
     mono_sum = not mono_sum
     engine.pan(mono_sum and 0.0 or 1.0)
   elseif n == 3 and z == 1 then
-    bypassed = not bypassed
+    ab_mode = not ab_mode
     apply_intensity()
   end
 end
