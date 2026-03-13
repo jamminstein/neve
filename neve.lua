@@ -18,6 +18,12 @@ local vu_level   = 0
 local vu_peak    = 0
 local vu_peak_ttl= 0
 
+-- NEW: Screen redesign state
+local beat_phase = 0
+local popup_param = nil
+local popup_val = nil
+local popup_time = 0
+
 local NUM_KNOBS = 12
 
 local KNOB_DEFS = {
@@ -174,146 +180,182 @@ function animate_knobs()
 end
 
 --------------------------------------
--- SCREEN
+-- SCREEN: NEW DESIGN SYSTEM
 --------------------------------------
 
-local function draw_knob(k, def, t)
-  local x, y, r = def.x, def.y, def.r
-
-  screen.level(2)
-  screen.arc(x, y, r + 1, BASE_ANGLE, BASE_ANGLE + 5.0)
-  screen.stroke()
-
-  screen.level(math.floor(util.linlin(0, 1, 3, 11, t)))
-  screen.circle(x, y, r)
-  screen.stroke()
-
-  screen.level((bypassed or ab_mode) and 5 or 15)
-  screen.move(x, y)
-  screen.line(
-    x + (r - 1) * math.cos(k.angle),
-    y + (r - 1) * math.sin(k.angle)
-  )
-  screen.stroke()
-
-  screen.level(stage_name ~= "---" and math.floor(util.linlin(0, 1, 2, 8, t)) or 2)
-  screen.font_size(4)
-  screen.font_face(1)
-  screen.move(x, y + r + 5)
-  screen.text_center(def.l)
+-- Helper: Get vocal preset name
+local function get_preset_name()
+  if vocal_preset >= 1 and vocal_preset <= #PRESET_NAMES then
+    return PRESET_NAMES[vocal_preset]:upper()
+  end
+  return nil
 end
 
-local function draw_vu()
-  local cx, cy, R = 64, 33, 9
-  local min_a = math.pi * (210 / 180)
-  local max_a = math.pi * (330 / 180)
-  local vu_a  = util.linlin(0, 1, min_a, max_a, math.min(vu_level, 1))
-  local pk_a  = util.linlin(0, 1, min_a, max_a, math.min(vu_peak,  1))
-
-  screen.level(2)
-  screen.arc(cx, cy, R, min_a, max_a)
-  screen.stroke()
-
-  if not (bypassed or ab_mode) and vu_level > 0.01 then
-    screen.level(math.floor(util.linlin(0, 1, 4, 14, vu_level)))
-    screen.arc(cx, cy, R, min_a, vu_a)
+-- Helper: Draw signal chain node
+local function draw_chain_node(x, y, brightness, stage_index, total_stages, t)
+  screen.aa(1)
+  local node_r = 3
+  
+  -- Node circle with brightness reflecting activity
+  local level = brightness == 0 and 3 or math.floor(util.linlin(0, 1, 3, 15, brightness))
+  screen.level(level)
+  screen.circle(x, y, node_r)
+  screen.fill()
+  
+  -- Highlight ring if this stage is active (filled stages <= intensity threshold)
+  local fill_threshold = intensity / 100 * total_stages
+  if stage_index <= fill_threshold then
+    screen.level(12)
+    screen.circle(x, y, node_r + 1)
     screen.stroke()
   end
+end
 
-  screen.level((bypassed or ab_mode) and 4 or 15)
-  screen.move(cx, cy)
-  screen.line(cx + R * math.cos(vu_a), cy + R * math.sin(vu_a))
-  screen.stroke()
-
-  if vu_peak > 0.02 then
-    screen.level(7)
-    screen.move(cx + (R-1) * math.cos(pk_a), cy + (R-1) * math.sin(pk_a))
-    screen.line(cx + (R+1) * math.cos(pk_a), cy + (R+1) * math.sin(pk_a))
-    screen.stroke()
+-- Helper: Draw waveform segment between nodes
+local function draw_waveform(x1, y1, x2, y2, complexity)
+  screen.aa(1)
+  local steps = 8
+  local height = 2 + complexity * 3
+  
+  screen.level(4 + complexity * 2)
+  screen.move(x1, y1)
+  
+  for i = 1, steps do
+    local t_pos = i / steps
+    local x = x1 + (x2 - x1) * t_pos
+    local y = y1 + (y2 - y1) * t_pos + math.sin(t_pos * math.pi + beat_phase) * height
+    screen.line(x, y)
   end
+  screen.stroke()
+end
 
-  screen.level(3)
+-- Helper: Draw the signal chain live zone
+local function draw_live_zone(t)
+  local y_base = 25
+  local x_start = 5
+  local x_spacing = 24
+  
+  -- Stage names and their current activity level
+  local stages = {
+    { name = "TRANS", x = x_start },
+    { name = "PREAMP", x = x_start + x_spacing * 1 },
+    { name = "COMP", x = x_start + x_spacing * 2 },
+    { name = "SOOTHE", x = x_start + x_spacing * 3 },
+    { name = "AIR", x = x_start + x_spacing * 4 },
+  }
+  
+  -- Draw connecting lines and waveforms
+  for i = 1, #stages - 1 do
+    local complexity = (i / (#stages - 1)) * t
+    draw_waveform(stages[i].x + 3, y_base, stages[i + 1].x - 3, y_base, complexity)
+  end
+  
+  -- Draw nodes
+  local fill_threshold = t * #stages
+  for i, stage in ipairs(stages) do
+    local brightness = i <= fill_threshold and 1.0 or 0.0
+    draw_chain_node(stage.x, y_base, brightness, i, #stages, t)
+  end
+  
+  -- A/B indicator (if toggle active)
+  if ab_mode then
+    screen.level(10)
+    screen.font_size(5)
+    screen.move(120, 18)
+    screen.text("B")
+  end
+end
+
+-- Helper: Draw context bar with intensity
+local function draw_context_bar()
+  local y = 54
+  
+  -- "INTENSITY" label
+  screen.level(4)
   screen.font_size(4)
-  screen.move(cx, cy + 5)
-  screen.text_center("VU")
+  screen.font_face(1)
+  screen.move(2, y + 4)
+  screen.text("INTENSITY")
+  
+  -- Intensity value as number
+  screen.level(5)
+  screen.font_size(4)
+  screen.move(60, y + 4)
+  screen.text_right(string.format("%3d", intensity))
+  
+  -- Mini bar graph (5 segments)
+  local bar_x = 65
+  for s = 0, 4 do
+    local fill = intensity / 100 * 5
+    local bright = s < math.floor(fill) and 10 or (s == math.floor(fill) and math.floor((fill % 1) * 8 + 2) or 3)
+    screen.level(bright)
+    screen.rect(bar_x + s * 11, y + 1, 10, 4)
+    screen.fill()
+  end
+  
+  -- MIDI channel (placeholder)
+  screen.level(5)
+  screen.font_size(4)
+  screen.move(128, y + 4)
+  screen.text_right("CH1")
+end
+
+-- Helper: Draw parameter popup
+local function draw_popup()
+  if popup_param == nil or popup_time <= 0 then return end
+  
+  local fade = math.min(1.0, popup_time / 0.8)
+  local bg_level = math.floor(fade * 15)
+  
+  -- Dark background box
+  screen.level(1)
+  screen.rect(20, 30, 88, 12)
+  screen.fill()
+  
+  -- Param name and value
+  screen.level(15)
+  screen.font_size(5)
+  screen.font_face(1)
+  screen.move(64, 37)
+  screen.text_center(popup_param .. ": " .. popup_val)
 end
 
 function redraw()
   local t = intensity / 100
   screen.clear()
-
-  -- grid
-  screen.level(1)
-  for gx = 0, 128, 16 do
-    screen.move(gx, 0) screen.line(gx, 64) screen.stroke()
-  end
-  for gy = 0, 64, 16 do
-    screen.move(0, gy) screen.line(128, gy) screen.stroke()
-  end
-
-  -- knobs
-  for i = 1, NUM_KNOBS do
-    draw_knob(knobs[i], KNOB_DEFS[i], t)
-  end
-
-  -- VU
-  draw_vu()
-
-  -- intensity bar (segmented)
-  for s = 0, 4 do
-    local fill  = t * 5
-    local bright
-    if s < math.floor(fill) then
-      bright = 15
-    elseif s == math.floor(fill) then
-      bright = math.floor((fill % 1) * 12)
-    else
-      bright = 2
-    end
-    screen.level(bright)
-    screen.rect(s * 26, 60, 24, 3)
-    screen.fill()
-  end
-
-  -- header
-  screen.level((bypassed or ab_mode) and 3 or math.floor(util.linlin(0, 1, 4, 15, t)))
+  
+  -- STATUS STRIP (y 0-8)
+  screen.level(4)
   screen.font_size(8)
   screen.font_face(4)
-  screen.move(2, 8)
+  screen.move(2, 7)
   screen.text("NEVE")
-
-  screen.level((bypassed or ab_mode) and 2 or math.floor(util.linlin(0, 1, 2, 10, t)))
-  screen.font_size(5)
-  screen.font_face(1)
-  screen.move(36, 8)
-  screen.text(stage_name)
-
-  screen.level(clip_mode == 1 and 10 or 4)
-  screen.move(60, 8)
-  screen.text(clip_mode == 0 and "TUBE" or "TAPE")
-
-  if mono_sum then
-    screen.level(10)
-    screen.move(86, 8)
-    screen.text("MONO")
+  
+  local preset_name = get_preset_name()
+  if preset_name then
+    screen.level(6)
+    screen.font_size(5)
+    screen.font_face(1)
+    screen.move(126, 7)
+    screen.text_right(preset_name)
   end
-
-  -- A/B mode display
-  if ab_mode then
-    screen.level(12)
-    screen.move(110, 8)
-    screen.text("B")
-  else
-    screen.level(4)
-    screen.move(110, 8)
-    screen.text("A")
-  end
-
-  screen.level(6)
-  screen.font_size(5)
-  screen.move(126, 8)
-  screen.text_right(string.format("%3d", intensity))
-
+  
+  -- Beat pulse dot at x=124
+  beat_phase = (beat_phase + 0.15) % (math.pi * 2)
+  local pulse_intensity = 3 + math.sin(beat_phase) * 6
+  screen.level(math.floor(pulse_intensity))
+  screen.circle(124, 4, 1)
+  screen.fill()
+  
+  -- LIVE ZONE (y 9-52)
+  draw_live_zone(t)
+  
+  -- CONTEXT BAR (y 53-58)
+  draw_context_bar()
+  
+  -- PARAMETER POPUP
+  draw_popup()
+  
   screen.update()
 end
 
@@ -338,12 +380,14 @@ function init()
 
   apply_intensity()
 
+  -- 10fps refresh for animation
   clock.run(function()
     while true do
-      clock.sleep(1/30)
+      clock.sleep(1/10)
       frame = frame + 1
       animate_knobs()
       update_vu()
+      popup_time = math.max(0, popup_time - 0.1)
       redraw()
     end
   end)
@@ -357,6 +401,11 @@ function enc(n, d)
   if n == 1 then
     intensity = util.clamp(intensity + d, 0, 100)
     apply_intensity()
+    
+    -- Show popup for intensity change
+    popup_param = "INTENSITY"
+    popup_val = string.format("%d", intensity)
+    popup_time = 0.8
   end
 end
 
@@ -364,12 +413,21 @@ function key(n, z)
   if n == 1 and z == 1 then
     clip_mode = 1 - clip_mode
     engine.clip_mode(clip_mode)
+    popup_param = "CLIP"
+    popup_val = clip_mode == 0 and "TUBE" or "TAPE"
+    popup_time = 0.8
   elseif n == 2 and z == 1 then
     mono_sum = not mono_sum
     engine.pan(mono_sum and 0.0 or 1.0)
+    popup_param = "MONO"
+    popup_val = mono_sum and "ON" or "OFF"
+    popup_time = 0.8
   elseif n == 3 and z == 1 then
     ab_mode = not ab_mode
     apply_intensity()
+    popup_param = "MODE"
+    popup_val = ab_mode and "B" or "A"
+    popup_time = 0.8
   end
 end
 
