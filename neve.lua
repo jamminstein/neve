@@ -12,11 +12,14 @@ local ab_mode    = false       -- false=A (processed), true=B (bypass)
 local clip_mode  = 0           -- 0=tube  1=tape
 local mono_sum   = false
 local vocal_preset = 1         -- 1=warm, 2=bright, 3=aggressive, 4=broadcast
+local saturation_type = 1      -- 1=even (warm), 2=odd (bright)
+local parallel_mix = 0.0       -- 0.0-1.0 dry/wet of compression stage
 local stage_name = "---"
 local frame      = 0
 local vu_level   = 0
 local vu_peak    = 0
 local vu_peak_ttl= 0
+local amp_in_l   = 0           -- input level poll
 
 -- NEW: Screen redesign state
 local beat_phase = 0
@@ -128,10 +131,17 @@ local function apply_intensity()
   engine.comp_ratio(util.linlin(0, 1, 1.5, 8.0, t))
   engine.comp_attack(util.linlin(0, 1, 0.05, 0.003, t))
   engine.comp_release(util.linlin(0, 1, 0.4, 0.08, t))
-  engine.comp_mix(util.linlin(0, 1, 0.0, 0.9, t))
+  local comp_wet = util.linlin(0, 1, 0.0, 0.9, t)
+  engine.comp_mix(util.linlin(0, parallel_mix, comp_wet, comp_wet * parallel_mix, 1))
 
-  -- spectral smooth
-  engine.sooth_q(util.linlin(0, 1, 0.5, 0.2, t))
+  -- harmonic character via saturation type (even=warm low mids, odd=bright highs)
+  if saturation_type == 1 then
+    -- even harmonics: warm, add low-mid presence
+    engine.sooth_q(util.linlin(0, 1, 0.5, 0.3, t))
+  else
+    -- odd harmonics: bright, enhance highs
+    engine.sooth_q(util.linlin(0, 1, 0.5, 0.15, t))
+  end
   engine.sooth_depth(util.linlin(0, 1, 0.0, 0.75, t))
 
   -- air shelf (fades in above 50%)
@@ -266,23 +276,23 @@ local function draw_live_zone(t)
   end
 end
 
--- Helper: Draw context bar with intensity
+-- Helper: Draw context bar with intensity and VU meter
 local function draw_context_bar()
   local y = 54
-  
+
   -- "INTENSITY" label
   screen.level(4)
   screen.font_size(4)
   screen.font_face(1)
   screen.move(2, y + 4)
   screen.text("INTENSITY")
-  
+
   -- Intensity value as number
   screen.level(5)
   screen.font_size(4)
   screen.move(60, y + 4)
   screen.text_right(string.format("%3d", intensity))
-  
+
   -- Mini bar graph (5 segments)
   local bar_x = 65
   for s = 0, 4 do
@@ -292,7 +302,19 @@ local function draw_context_bar()
     screen.rect(bar_x + s * 11, y + 1, 10, 4)
     screen.fill()
   end
-  
+
+  -- VU meter: horizontal bar showing input level
+  screen.level(3)
+  screen.rect(2, y - 4, 55, 2)
+  screen.stroke()
+  local vu_width = math.floor(vu_level * 55)
+  if vu_width > 0 then
+    local vu_bright = vu_level > 0.8 and 15 or (vu_level > 0.6 and 12 or 8)
+    screen.level(vu_bright)
+    screen.rect(2, y - 4, vu_width, 2)
+    screen.fill()
+  end
+
   -- MIDI channel (placeholder)
   screen.level(5)
   screen.font_size(4)
@@ -360,6 +382,19 @@ function redraw()
 end
 
 --------------------------------------
+-- MIDI CC AUTOMATION (CC1 → intensity)
+--------------------------------------
+
+function midi.event(data)
+  local msg = midi.to_msg(data)
+  if msg.type == "cc" and msg.cc == 1 then
+    -- CC1 (modulation) controls intensity knob
+    intensity = util.clamp(msg.val / 127 * 100, 0, 100)
+    apply_intensity()
+  end
+end
+
+--------------------------------------
 -- INIT
 --------------------------------------
 
@@ -378,7 +413,25 @@ function init()
     apply_intensity()
   end)
 
+  params:add_option("saturation_type", "saturation type", {"even (warm)", "odd (bright)"}, saturation_type)
+  params:set_action("saturation_type", function(v)
+    saturation_type = v
+    apply_intensity()
+  end)
+
+  params:add_control("parallel_mix", "parallel mix",
+    controlspec.new(0, 1, "lin", 0.01, 0.0, ""))
+  params:set_action("parallel_mix", function(v)
+    parallel_mix = v
+    apply_intensity()
+  end)
+
   apply_intensity()
+
+  -- Set up input level poll
+  if poll then
+    poll.set("amp_in_l", function(val) vu_level = math.min(1.0, val / 1.0) end)
+  end
 
   -- 10fps refresh for animation
   clock.run(function()
