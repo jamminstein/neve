@@ -16,6 +16,7 @@ local saturation_type = 1      -- 1=even (warm), 2=odd (bright)
 local parallel_mix = 0.0       -- 0.0-1.0 dry/wet of compression stage
 local stage_name = "---"
 local frame      = 0
+local screen_clock_id = nil
 local vu_level   = 0
 local vu_peak    = 0
 local vu_peak_ttl= 0
@@ -434,7 +435,7 @@ function init()
   end
 
   -- 10fps refresh for animation
-  clock.run(function()
+  screen_clock_id = clock.run(function()
     while true do
       clock.sleep(1/10)
       frame = frame + 1
@@ -494,6 +495,7 @@ end
 --------------------------------------
 
 function cleanup()
+  if screen_clock_id then clock.cancel(screen_clock_id) end
   engine.input_gain(1.0)
   engine.sat_drive(0.0)
   engine.trans_mix(0.0)
