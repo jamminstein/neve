@@ -463,18 +463,23 @@ function enc(n, d)
 end
 
 function key(n, z)
-  if n == 1 and z == 1 then
-    clip_mode = 1 - clip_mode
-    engine.clip_mode(clip_mode)
-    popup_param = "CLIP"
-    popup_val = clip_mode == 0 and "TUBE" or "TAPE"
-    popup_time = 0.8
+  if n == 1 then
+    k1_held = (z == 1)
+    return
   elseif n == 2 and z == 1 then
-    mono_sum = not mono_sum
-    engine.pan(mono_sum and 0.0 or 1.0)
-    popup_param = "MONO"
-    popup_val = mono_sum and "ON" or "OFF"
-    popup_time = 0.8
+    if k1_held then
+      clip_mode = 1 - clip_mode
+      engine.clip_mode(clip_mode)
+      popup_param = "CLIP"
+      popup_val = clip_mode == 0 and "TUBE" or "TAPE"
+      popup_time = 0.8
+    else
+      mono_sum = not mono_sum
+      engine.pan(mono_sum and 0.0 or 1.0)
+      popup_param = "MONO"
+      popup_val = mono_sum and "ON" or "OFF"
+      popup_time = 0.8
+    end
   elseif n == 3 and z == 1 then
     ab_mode = not ab_mode
     apply_intensity()
