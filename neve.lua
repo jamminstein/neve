@@ -204,7 +204,7 @@ end
 
 -- Helper: Draw signal chain node
 local function draw_chain_node(x, y, brightness, stage_index, total_stages, t)
-  screen.aa(1)
+  screen.aa(0)
   local node_r = 3
   
   -- Node circle with brightness reflecting activity
@@ -224,7 +224,7 @@ end
 
 -- Helper: Draw waveform segment between nodes
 local function draw_waveform(x1, y1, x2, y2, complexity)
-  screen.aa(1)
+  screen.aa(0)
   local steps = 8
   local height = 2 + complexity * 3
   
